@@ -34,7 +34,7 @@ function load(): Env {
 
   // In live mode the certificate material is mandatory. We assert it here so a
   // misconfigured deploy fails on boot with a precise message, instead of dying
-  // at TLS handshake time with SET's opaque 302-to-portal redirect.
+  // at TLS handshake time with an opaque refusal that returns no readable fault.
   if (parsed.data.SIFEN_MODE === "live") {
     if (!parsed.data.SIFEN_CERT_PEM || !parsed.data.SIFEN_PRIVATE_KEY_PEM) {
       throw new Error(

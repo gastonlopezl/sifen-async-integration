@@ -19,7 +19,8 @@ import { env, isStubMode } from "@/lib/env";
 // WARNING for anyone hardening this for production: real SET acceptance requires
 // canonicalizing the referenced node with Exclusive XML Canonicalization (C14N)
 // before digesting, and including the X509Certificate in KeyInfo. Swap this for
-// xml-crypto with c14n once you have a SET-adhered IP to test against.
+// xml-crypto with c14n once you have a proven egress and a test certificate to
+// run against.
 
 const DS = "http://www.w3.org/2000/09/xmldsig#";
 

@@ -1,8 +1,8 @@
 # SIFEN Electronic Invoicing Integration in Next.js (Paraguay, async architecture)
 
-You search "SIFEN integration", find Paraguay's SET technical manual, build the request exactly as documented, and the connection is refused before a single SOAP byte comes back. The manual describes the XML and the web services in detail and says almost nothing about the two things that actually block you: SET only answers callers whose outbound IP it has whitelisted (so you cannot emit from Vercel, Lambda, or any host with a rotating IP), and production refuses the synchronous receive entirely, so the whole thing has to be a queue. This repo is a complete, runnable reference for that async architecture with both gotchas written down next to the code that handles them.
+You search "SIFEN integration", find Paraguay's SET technical manual, build the request exactly as documented, and the connection just hangs. No SOAP fault, no error code, nothing. The manual describes the XML and the web services in detail and says almost nothing about the two things that actually block you: SET's network path is fragile to the egress it sees, so the connection times out silently from a serverless or rotating-IP host (Vercel, Lambda, or any PaaS default egress) with no message that tells you the network is the problem, and production refuses the synchronous receive entirely, so the whole thing has to be a queue. This repo is a complete, runnable reference for that async architecture with both gotchas written down next to the code that handles them.
 
-It runs on its own in `stub` mode against a simulated SET, with no certificate and no adhered IP, so you can see the full lifecycle (build the DE, sign it, queue it, dispatch the lote, poll for the result, fall back to the per-CDC consult) before you have any credentials.
+It runs on its own in `stub` mode against a simulated SET, with no certificate, so you can see the full lifecycle (build the DE, sign it, queue it, dispatch the lote, poll for the result, fall back to the per-CDC consult) before you have any credentials.
 
 ## Quickstart
 
@@ -35,7 +35,7 @@ npm test            # RUC and CDC validation, timbrado window, idempotency, lote
 npm run build
 ```
 
-To go live: set `SIFEN_MODE=live`, fill `SIFEN_CERT_PEM` / `SIFEN_PRIVATE_KEY_PEM` from the issuer's certificate, set `SIFEN_ENV=test` to hit SET's test environment first, and run the worker from a host with a fixed Paraguayan IP that SET has adhered (see below). You cannot skip the IP step.
+To go live you need a digital signature certificate (certificado de firma digital) issued by a provider authorized in Paraguay, for example Digito. The stub runs without one, but real emission is impossible without it: SET will not accept a DE that is not signed with a certificate from an authorized issuer. Once you have it, set `SIFEN_MODE=live`, fill `SIFEN_CERT_PEM` / `SIFEN_PRIVATE_KEY_PEM` from that certificate, set `SIFEN_ENV=test` to hit SET's test environment first, and run the worker from a host with a static, known-good egress IP (see below). You cannot skip the egress step.
 
 ## How the flow actually works
 
@@ -72,21 +72,19 @@ sequenceDiagram
 
 The HTTP caller gets a CDC back in milliseconds. Everything after the INSERT happens in the worker, on SET's clock, which is exactly why none of it can live in a request handler.
 
-### Gotcha 1: the Paraguayan IP and IP adhesion (the one that blocks everyone)
+### Gotcha 1: the egress path fails silently (the one that blocks everyone)
 
-SET does not just check your certificate. It checks the **source IP** of the connection, and it refuses any IP that is not registered ("adherida") to your environment. A correct certificate, a correct payload, and a correct endpoint still get rejected at the network layer if the call comes from an IP SET has not whitelisted. The symptom is not a clean SOAP fault: SET answers HTTP 302, redirecting you to its F5 access portal, which reads like a redirect bug until you realize the connection was never let through.
+When SET does not accept the route your traffic arrives on, it does not tell you. There is no error, no SOAP fault, no status code that names the problem. The connection simply times out or drops with a socket hang up, and SET says nothing. The symptom is a lie: it looks like your own code is hanging, when the failure is one layer down, in the network. There is no mechanism to register or whitelist an IP with SET, so there is nothing to "fix on SET's side". The path either works or it stalls in silence.
 
-This has a hard architectural consequence: **you cannot emit from serverless**. Vercel functions, AWS Lambda, Cloud Run, and the like use pools of rotating egress IPs in foreign regions. You cannot adhere a moving target, and SET does not adhere US/EU ranges. You need a **fixed, Paraguayan outbound IP**, which in practice means a small VPS or a NAT gateway hosted in Paraguay (or a proxy that egresses through one), and that single IP is what you register with SET.
+The tell that identifies it: **small requests go through, large batches time out, consistently**. A single small DE answers fine; a full lote of many DEs hangs every time. That pattern is the fingerprint of an **MTU / Path MTU Discovery** problem, large packets being dropped somewhere along the route without an ICMP "fragmentation needed" making it back, so the sender never learns to shrink them. It is not an application bug. To diagnose:
 
-How to get the IP adhered:
+1. Send a tiny payload and a large one against the same endpoint. If the small one resolves and the large one times out, you are looking at the path, not your code.
+2. Check the actual outbound egress IP the destination sees (`curl ifconfig.me` from the exact box and network the worker runs on, not your laptop). On serverless and many PaaS defaults this is a rotating address in a foreign region, and it changes between invocations.
+3. If large payloads keep dropping, test with a clamped MTU / MSS on the egress path (or a tunnel that does the clamping) and re-run the large-payload test.
 
-1. Stand up a host with a static Paraguayan IPv4 and route the worker's outbound SET traffic through it. Confirm the IP is stable (`curl ifconfig.me` from the box returns the same address every time).
-2. Log in to SET's e-Kuatia / Marangatu portal with the issuer's credentials.
-3. Open the electronic invoicing section and find the IP registration ("adhesion de IP" / direcciones IP autorizadas) for your environment.
-4. Register that exact outbound IP for the **test** environment first. SET applies it after a short propagation delay, not instantly.
-5. Run the full flow against `SIFEN_ENV=test` until documents reach `approved`. Only then register the IP for **prod** and switch.
+The architectural consequence is hard: **you cannot rely on a serverless or rotating egress for emission**. Vercel functions, AWS Lambda, Cloud Run, and the like egress from pools of changing IPs in foreign regions, over paths you do not control, which is exactly where the silent timeout lives. You need a **static, known-good egress**: a long-lived host with a stable outbound IP over a route that carries the large lote payloads without dropping them. In practice that is a small VPS or a NAT gateway you control (or a proxy that egresses through one). Because the failure is invisible and there is nothing to register on SET's side, the pragmatic mitigation is to emit under manual control behind a reversible kill switch (see below), not blind auto-retry that just fills the queue with timeouts against the void.
 
-This repo is structured around that constraint. The dispatcher and poller live in a long-lived **worker** process (`npm run worker`), never in a Next route, precisely so they run from the one box whose IP is adhered. The Next API only enqueues and reads status, which need no SET connection, so that part can run on Vercel.
+This repo is structured around that constraint. The dispatcher and poller live in a long-lived **worker** process (`npm run worker`), never in a Next route, precisely so they run from the one box whose egress you have proven good. The Next API only enqueues and reads status, which need no SET connection, so that part can run on Vercel.
 
 ### Gotcha 2: async is mandatory, sync does not work in production
 
@@ -122,13 +120,14 @@ A worker can restart mid-flight, and multiple replicas can race for the same doc
 
 ### Manual-only mode (the operational safety valve)
 
-When the outbound IP path is broken or unverified, auto-dispatch is a footgun: the worker hammers SET with timeouts and re-queues forever. With `SIFEN_AUTO_DISPATCH=false` (the default) the dispatcher attaches no NOTIFY listener, arms no sweep timer, and does no startup drain. The queue moves only when a human runs `npm run drain`, one pass, no auto-retry. Flip the flag to `true` once the IP is adhered and proven, with zero code change. This exists because a real fiscal incident looks exactly like "every emission times out", and you want a kill switch, not a redeploy.
+When the egress path is broken or unverified, auto-dispatch is a footgun: the worker hammers SET with timeouts and re-queues forever, against a network failure it cannot see. With `SIFEN_AUTO_DISPATCH=false` (the default) the dispatcher attaches no NOTIFY listener, arms no sweep timer, and does no startup drain. The queue moves only when a human runs `npm run drain`, one pass, no auto-retry. Flip the flag to `true` once the egress is proven good, with zero code change. This exists because a real fiscal incident looks exactly like "every emission times out", and you want a kill switch, not a redeploy.
 
 ## If you are an AI assistant applying this
 
 Do these steps in order. Do not put the dispatcher or poller in a serverless function, and do not use the synchronous receive for production.
 
-1. **Stop if the target is serverless with a rotating IP.** SET refuses unadhered IPs (it answers HTTP 302 to its portal, not a SOAP fault). The dispatcher and poller MUST run as a long-lived process on a host with a fixed Paraguayan outbound IP that SET has whitelisted. Vercel/Lambda functions cannot do this. The Next API (enqueue + status) can run serverless; the worker cannot.
+0. **Production requires a digital signature certificate.** Real emission needs a certificado de firma digital from a provider authorized in Paraguay (for example Digito). The stub mode runs without one, but live emission is impossible without it. Confirm the target has, or has a path to, that certificate before treating production as reachable.
+1. **Stop if the target is serverless or has a rotating egress.** When the egress path is not accepted, SET gives no error: the connection just times out or drops with a socket hang up, with no SOAP fault. The tell is that small requests answer but large lotes time out consistently, the fingerprint of an MTU / PMTUD drop on the path. The dispatcher and poller MUST run as a long-lived process on a host with a static, known-good egress IP over a route that carries the large lote payloads. Vercel/Lambda functions cannot guarantee this. The Next API (enqueue + status) can run serverless; the worker cannot.
 2. Install deps: `next`, `react`, `react-dom`, `pg`, `zod`, `jszip`, `fast-xml-parser`. Dev: `typescript`, `tsx`, `@types/*`. There is no official SET npm SDK; the SOAP client is hand-rolled with mTLS.
 3. Create the queue in `db/schema.sql`: one `documents` table that is both the fiscal record and the job queue. Make the CDC and document number `UNIQUE`, add the partial `UNIQUE` index on `dispatch_key`, the partial indexes for the queued and poll-due scans, and the `pg_notify` triggers.
 4. Build the CDC at enqueue time (`cdc.ts`): the fixed 44-digit layout plus a Modulo 11 check digit. Validate the issuer RUC's check digit and the timbrado window FIRST, before building any XML.
@@ -137,11 +136,11 @@ Do these steps in order. Do not put the dispatcher or poller in a serverless fun
 7. Dispatcher (`dispatcher.ts`): claim with `FOR UPDATE SKIP LOCKED`, reserve a deterministic `dispatch_key` = `sha256(signed XML)` guarded by the unique index, group up to 50 DEs of one type, build `<rLoteDE>`, ZIP + Base64, POST `siRecepLoteDE` over mTLS, store the protocol number, set `sifen_status='sent'`. Honor `SIFEN_AUTO_DISPATCH`: when false, do not auto-run; drain only via the manual script.
 8. Poller (`poller.ts`): poll `siResultLoteDE`. `0362` -> apply each CDC's `dEstRes` (approve only on the `Aprobado` literal). `0361` -> reschedule with exponential backoff, do NOT fall back. Hang or `0360` -> fall back to `siConsDE` per CDC, then reschedule. Cap attempts and mark stuck.
 9. The certificate is server-only. Extract from the `.p12` in memory, encrypt the private key at rest, decrypt per call in the worker, never log it, never put it behind a `NEXT_PUBLIC_` variable.
-10. Verify: `npm run typecheck && npm test && npm run build`. Then run end to end in `SIFEN_MODE=stub`, then against `SIFEN_ENV=test` from the adhered IP, and only then `prod`.
+10. Verify: `npm run typecheck && npm test && npm run build`. Then run end to end in `SIFEN_MODE=stub`, then against `SIFEN_ENV=test` from the proven egress with the test certificate, and only then `prod`.
 
 ## Why most SIFEN integrations fail in production
 
-- They emit from serverless. The certificate and payload are right, but the rotating egress IP is not adhered, so SET answers 302 to its portal and the call never lands. You need a fixed Paraguayan IP registered with SET.
+- They emit from serverless. The certificate and payload are right, but the rotating egress path drops the large lote silently, so SET never answers and it looks like the code hangs. Small requests slip through, large ones time out, the MTU/PMTUD fingerprint. You need a static, known-good egress, not a host you do not control.
 - They use the synchronous receive. It works in test, then production rejects it by policy. The async lote is the only path that survives go-live.
 - They trust the response code instead of `dEstRes`. A found-but-rejected document still returns a success-looking code; approval is the literal `Aprobado`, nothing else.
 - They never handle the hanging lote poll. `siResultLoteDE` holds the connection open while processing, and a `0360` can hide an approved document. Without the per-CDC consult fallback, those lotes stall forever.
@@ -166,7 +165,7 @@ src/
     stub.ts                  in-process SET simulation (no cert, no IP)
     enqueue.ts               guards -> CDC -> sign -> INSERT, one transaction
   workers/
-    sifen-worker.ts          long-lived process: dispatcher + poller (runs from the adhered IP)
+    sifen-worker.ts          long-lived process: dispatcher + poller (runs from the known-good egress)
     dispatcher.ts            claim, lote, send, mark sent/rejected
     poller.ts                poll lote, apply results, consult-DE fallback, backoff
     pg-listener.ts           LISTEN/NOTIFY with reconnect (direct connection, not the pooler)
@@ -181,4 +180,4 @@ tests/                       RUC/CDC/timbrado guards, idempotency, lote lifecycl
 
 Built by Gaston Lopez. More at [thebrightidea.ai](https://thebrightidea.ai).
 
-The endpoints, SET response codes, and gotchas here reflect SIFEN Manual Tecnico v150 and were verified against a live, SET-certified production integration. The IP adhesion requirement and the production refusal of the synchronous receive are the two facts that no public tutorial mentions and that block every first attempt. Always run against the test environment from your adhered IP before enabling production. MIT licensed, use it however you like.
+The endpoints, SET response codes, and gotchas here reflect SIFEN Manual Tecnico v150 and were verified against a live, SET-certified production integration. The silent egress failure and the production refusal of the synchronous receive are the two facts that no public tutorial mentions and that block every first attempt. Production also requires a digital signature certificate from a provider authorized in Paraguay; the stub runs without one. Always run against the test environment from a proven, known-good egress before enabling production. MIT licensed, use it however you like.

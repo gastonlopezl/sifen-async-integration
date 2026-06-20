@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import type { ConsultResult, LoteResult, LoteSendResult } from "./client";
 
 // In-process simulation of SET's async lote lifecycle, so the whole pipeline
-// (enqueue -> dispatch -> poll -> approve) runs with no certificate and no
-// adhered IP. It models the one timing behaviour the poller's backoff exists
-// for: a lote is "processing" for a short window, then "processed".
+// (enqueue -> dispatch -> poll -> approve) runs with no certificate and no real
+// network. It models the one timing behaviour the poller's backoff exists for: a
+// lote is "processing" for a short window, then "processed".
 //
 // The map is bounded: a lote is deleted the first time it is polled in the
 // processed state, so it cannot grow without bound. It is process-local on

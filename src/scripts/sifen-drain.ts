@@ -5,11 +5,11 @@ import { SifenDispatcher } from "@/workers/dispatcher";
 // Manual emission trigger. Drains the queue of 'queued' documents ONCE and exits.
 // This is the only path that sends to SET when SIFEN_AUTO_DISPATCH is false.
 //
-// The reason it exists: when the deploy's outbound IP is not adhered to SET (or
-// you are not sure it is), letting the worker auto-retry against SET is harmful.
-// It generates a storm of timeouts and re-queues forever. So the worker runs in
-// manual-only mode and a human pushes the backlog with this script, once the IP
-// path is known to work:
+// The reason it exists: when the deploy's egress path to SET is not good (or you
+// are not sure it is), letting the worker auto-retry against SET is harmful. It
+// generates a storm of silent timeouts and re-queues forever. So the worker runs
+// in manual-only mode and a human pushes the backlog with this script, once the
+// egress path is known to work:
 //
 //   npm run drain
 //

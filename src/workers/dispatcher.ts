@@ -69,13 +69,13 @@ export class SifenDispatcher {
     if (this.running) return;
     this.running = true;
 
-    // Manual-only mode. When the outbound IP path to SET is broken or unverified
-    // (the classic case: deployed somewhere whose egress IP SET has not adhered),
-    // auto-dispatch is a footgun: it hammers SET with timeouts and re-queues
-    // forever. With SIFEN_AUTO_DISPATCH=false the dispatcher attaches NO listener,
-    // arms NO sweep, and does NO boot drain. The queue only moves when a human
-    // runs `npm run drain`. Flip the flag to true once the IP is adhered and the
-    // path is proven, with zero code change.
+    // Manual-only mode. When the egress path to SET is broken or unverified
+    // (the classic case: deployed on a host whose egress drops the large lote
+    // silently), auto-dispatch is a footgun: it hammers SET with timeouts and
+    // re-queues forever. With SIFEN_AUTO_DISPATCH=false the dispatcher attaches NO
+    // listener, arms NO sweep, and does NO boot drain. The queue only moves when a
+    // human runs `npm run drain`. Flip the flag to true once the egress is proven
+    // good, with zero code change.
     if (!env.SIFEN_AUTO_DISPATCH) {
       logger.warn("dispatcher.manual_only", {
         note: "SIFEN_AUTO_DISPATCH is false: no NOTIFY, no sweep, no boot drain. Use `npm run drain`.",
@@ -230,10 +230,10 @@ export class SifenDispatcher {
   }
 
   // A transport failure (timeout, socket hang up, 5xx) is the signature of a
-  // broken outbound path: the classic case is the deploy's egress IP not being
-  // adhered to SET, so every send times out. Bump the counter, and after the cap
-  // mark rejected so the loop cannot run forever. Below the cap, return the docs
-  // to the queue for the next tick.
+  // broken outbound path: the classic case is the deploy's egress dropping the
+  // large lote silently, so every send times out with no SET error. Bump the
+  // counter, and after the cap mark rejected so the loop cannot run forever. Below
+  // the cap, return the docs to the queue for the next tick.
   private async handleTransient(ids: string[], err: unknown): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     // poll_attempts doubles as the dispatch retry counter here. A document is

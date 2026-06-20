@@ -2,7 +2,7 @@
   "name": "sifen-async-integration",
   "version": "1.0.0",
   "private": false,
-  "description": "SIFEN electronic invoicing for Paraguay in Next.js. The async lote architecture (enqueue, sign, dispatch, poll, consultDE fallback) plus the IP adhesion gotcha that blocks every serverless integration.",
+  "description": "SIFEN electronic invoicing for Paraguay in Next.js. The async lote architecture (enqueue, sign, dispatch, poll, consultDE fallback) plus the silent egress timeout gotcha that blocks every serverless integration.",
   "license": "MIT",
   "author": "Gaston Lopez",
   "homepage": "https://thebrightidea.ai",

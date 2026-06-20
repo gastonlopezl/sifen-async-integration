@@ -8,8 +8,8 @@ import { runStub } from "./stub";
 // SIFEN SOAP 1.2 client over mutual TLS.
 //
 // SET requires mTLS: the client MUST present its X.509 certificate AND private
-// key during the TLS handshake. Without it SET answers HTTP 302 to its F5 portal
-// (not a SOAP fault), which looks like a redirect bug until you realize the
+// key during the TLS handshake. Without it the handshake is refused and you get
+// no SOAP fault to read, which looks like a transport bug until you realize the
 // handshake never presented a cert. There is no API key and no bearer token: the
 // certificate IS the authentication.
 //
@@ -38,9 +38,9 @@ const TIMEOUT_MS = 90_000;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const SIFEN_NS = "http://ekuatia.set.gov.py/sifen/xsd";
 
-// SET's F5 load balancer leaves reused keep-alive sockets in a state where they
-// hang for the full timeout without returning. A fresh agent per request pays a
-// ~200-500ms handshake cost but never hangs. Acceptable for batched lote volume.
+// SET's edge leaves reused keep-alive sockets in a state where they hang for the
+// full timeout without returning. A fresh agent per request pays a ~200-500ms
+// handshake cost but never hangs. Acceptable for batched lote volume.
 function freshAgent(): https.Agent {
   return new https.Agent({ keepAlive: false });
 }
@@ -97,9 +97,10 @@ async function soapPost(
       },
       (res) => {
         if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-          // A 302 here almost always means the mTLS cert was not presented or
-          // the source IP is not adhered: SET bounces unauthenticated callers to
-          // its portal instead of answering SOAP.
+          // A non-2xx here usually means the mTLS cert was not presented or the
+          // request never reached the SOAP endpoint. Note the harder failure mode
+          // gives no status at all: when the egress path is not good, the socket
+          // just times out or hangs up with nothing to read (see the README).
           res.resume();
           reject(new Error(`SIFEN HTTP ${res.statusCode}`));
           return;

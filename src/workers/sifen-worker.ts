@@ -3,12 +3,13 @@ import { PgListener } from "./pg-listener";
 import { SifenDispatcher } from "./dispatcher";
 import { SifenPoller } from "./poller";
 
-// The long-lived worker. This is the process that MUST run on a box with a fixed
-// Paraguayan outbound IP that SET has adhered (see README). It is deliberately NOT
-// a Next route and NOT a serverless function: SET only answers callers whose
-// source IP it has whitelisted, and serverless egress IPs rotate. One listener
-// feeds both the dispatcher and the poller, and SIGTERM aborts in-flight SOAP
-// requests so a deploy never strands a half-sent lote.
+// The long-lived worker. This is the process that MUST run on a box with a
+// static, known-good egress IP (see README). It is deliberately NOT a Next route
+// and NOT a serverless function: when the egress path is not good SET answers
+// nothing, the connection just times out, and serverless egress IPs rotate over
+// paths you do not control. One listener feeds both the dispatcher and the poller,
+// and SIGTERM aborts in-flight SOAP requests so a deploy never strands a half-sent
+// lote.
 async function main(): Promise<void> {
   const listener = new PgListener();
   const dispatcher = new SifenDispatcher(listener);
