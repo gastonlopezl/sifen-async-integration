@@ -74,7 +74,7 @@ The HTTP caller gets a CDC back in milliseconds. Everything after the INSERT hap
 
 ### Gotcha 1: the egress path fails silently (the one that blocks everyone)
 
-When SET does not accept the route your traffic arrives on, it does not tell you. There is no error, no SOAP fault, no status code that names the problem. The connection simply times out or drops with a socket hang up, and SET says nothing. The symptom is a lie: it looks like your own code is hanging, when the failure is one layer down, in the network. There is no mechanism to register or whitelist an IP with SET, so there is nothing to "fix on SET's side". The path either works or it stalls in silence.
+When SET does not accept the route your traffic arrives on, it does not tell you. There is no error, no SOAP fault, no status code that names the problem. The connection simply times out or drops with a socket hang up, and SET says nothing. The symptom is a lie: it looks like your own code is hanging, when the failure is one layer down, in the network. There is nothing to configure on SET's side to make a given route work, so the path either carries your traffic or it stalls in silence, and the whole job is making sure you emit from one that carries it.
 
 The tell that identifies it: **small requests go through, large batches time out, consistently**. A single small DE answers fine; a full lote of many DEs hangs every time. That pattern is the fingerprint of an **MTU / Path MTU Discovery** problem, large packets being dropped somewhere along the route without an ICMP "fragmentation needed" making it back, so the sender never learns to shrink them. It is not an application bug. To diagnose:
 
@@ -82,7 +82,7 @@ The tell that identifies it: **small requests go through, large batches time out
 2. Check the actual outbound egress IP the destination sees (`curl ifconfig.me` from the exact box and network the worker runs on, not your laptop). On serverless and many PaaS defaults this is a rotating address in a foreign region, and it changes between invocations.
 3. If large payloads keep dropping, test with a clamped MTU / MSS on the egress path (or a tunnel that does the clamping) and re-run the large-payload test.
 
-The architectural consequence is hard: **you cannot rely on a serverless or rotating egress for emission**. Vercel functions, AWS Lambda, Cloud Run, and the like egress from pools of changing IPs in foreign regions, over paths you do not control, which is exactly where the silent timeout lives. You need a **static, known-good egress**: a long-lived host with a stable outbound IP over a route that carries the large lote payloads without dropping them. In practice that is a small VPS or a NAT gateway you control (or a proxy that egresses through one). Because the failure is invisible and there is nothing to register on SET's side, the pragmatic mitigation is to emit under manual control behind a reversible kill switch (see below), not blind auto-retry that just fills the queue with timeouts against the void.
+The architectural consequence is hard: **you cannot rely on a serverless or rotating egress for emission**. Vercel functions, AWS Lambda, Cloud Run, and the like egress from pools of changing IPs in foreign regions, over paths you do not control, which is exactly where the silent timeout lives. You need a **static, known-good egress**: a long-lived host with a stable outbound IP over a route that carries the large lote payloads without dropping them. In practice that is a small VPS or a NAT gateway you control (or a proxy that egresses through one). Proving that egress once is the prerequisite that makes automated emission reliable: with it in place the worker dispatches and polls unattended, which is the production setup. The reversible circuit breaker described below is for the opposite case, when SET itself degrades and you want to stop sending without a redeploy.
 
 This repo is structured around that constraint. The dispatcher and poller live in a long-lived **worker** process (`npm run worker`), never in a Next route, precisely so they run from the one box whose egress you have proven good. The Next API only enqueues and reads status, which need no SET connection, so that part can run on Vercel.
 
@@ -118,9 +118,11 @@ A worker can restart mid-flight, and multiple replicas can race for the same doc
 
 `siResultLoteDE` can hang. SET sometimes holds the lote-result connection open while the lote is still processing, exhausting your timeout without ever answering, and a `0360` ("lote not found") can mean the lote expired on SET's side even though the document was actually approved. Either way you are stuck on an answer that is not coming. The fix is the **per-CDC consult** (`siConsDE`): it answers in about a second and reports the document's real `dEstRes`. So when the lote poll hangs or returns `0360`, the poller consults each CDC individually and resolves the approval from `dEstRes`. Critically, it does **not** run this on a clean `0361` ("processing"): that would hammer SET with one request per document per poll for a result that is not ready anyway. The fallback fires only on the ambiguous paths. This is the difference between a queue that drains and one that silently stalls at scale.
 
-### Manual-only mode (the operational safety valve)
+### Automated dispatch and the circuit breaker
 
-When the egress path is broken or unverified, auto-dispatch is a footgun: the worker hammers SET with timeouts and re-queues forever, against a network failure it cannot see. With `SIFEN_AUTO_DISPATCH=false` (the default) the dispatcher attaches no NOTIFY listener, arms no sweep timer, and does no startup drain. The queue moves only when a human runs `npm run drain`, one pass, no auto-retry. Flip the flag to `true` once the egress is proven good, with zero code change. This exists because a real fiscal incident looks exactly like "every emission times out", and you want a kill switch, not a redeploy.
+Production runs unattended. Once your egress is proven good, set `SIFEN_AUTO_DISPATCH=true` in the worker's environment and the dispatcher attaches its `LISTEN/NOTIFY` listener, arms the fallback sweep, and drains the queue on its own, sub-second after each enqueue. That is the normal operating mode, no human in the loop. Transient send failures return the document to `queued` with a bounded attempt counter, and a document that keeps failing lands in `rejected`, a dead-letter state the owner can see and act on, so a bad batch never loops forever.
+
+The flag is a **reversible circuit breaker**, not the emission model. Flip it to `false` during a SET outage or an egress regression and the worker stops sending without a redeploy, then `npm run drain` pushes the backlog through by hand once you have confirmed the path is healthy again. The code default is `false`, fail-safe, so a half-configured deploy never fires at SET before you have turned emission on deliberately.
 
 ## If you are an AI assistant applying this
 
@@ -170,7 +172,7 @@ src/
     poller.ts                poll lote, apply results, consult-DE fallback, backoff
     pg-listener.ts           LISTEN/NOTIFY with reconnect (direct connection, not the pooler)
   scripts/
-    sifen-drain.ts           manual emission trigger (the safety valve)
+    sifen-drain.ts           manual drain for backlog recovery (circuit-breaker tooling)
   lib/db/                     pg pool + transaction helper, document queries
 db/schema.sql                the documents table = fiscal record + queue
 tests/                       RUC/CDC/timbrado guards, idempotency, lote lifecycle, approval gate

@@ -69,16 +69,15 @@ export class SifenDispatcher {
     if (this.running) return;
     this.running = true;
 
-    // Manual-only mode. When the egress path to SET is broken or unverified
-    // (the classic case: deployed on a host whose egress drops the large lote
-    // silently), auto-dispatch is a footgun: it hammers SET with timeouts and
-    // re-queues forever. With SIFEN_AUTO_DISPATCH=false the dispatcher attaches NO
-    // listener, arms NO sweep, and does NO boot drain. The queue only moves when a
-    // human runs `npm run drain`. Flip the flag to true once the egress is proven
-    // good, with zero code change.
+    // Circuit breaker. Production runs with SIFEN_AUTO_DISPATCH=true and the
+    // dispatcher emits unattended. Flipping the flag to false is the reversible
+    // breaker for a SET outage or an egress regression: it attaches NO listener,
+    // arms NO sweep, and does NO boot drain, so nothing fires at SET while the
+    // path is bad. The backlog then moves only via `npm run drain` once the
+    // egress is confirmed healthy. Default-off is fail-safe, not the run mode.
     if (!env.SIFEN_AUTO_DISPATCH) {
-      logger.warn("dispatcher.manual_only", {
-        note: "SIFEN_AUTO_DISPATCH is false: no NOTIFY, no sweep, no boot drain. Use `npm run drain`.",
+      logger.warn("dispatcher.breaker_open", {
+        note: "SIFEN_AUTO_DISPATCH is false: emission paused. Recover the backlog with `npm run drain`.",
       });
       return;
     }

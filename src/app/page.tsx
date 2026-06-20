@@ -18,7 +18,7 @@ export default function Home() {
       </ul>
       <p>
         The dispatch and poll loops run in the worker process (<code>npm run worker</code>),
-        which must run from a Paraguayan IP adhered with SET. Read the README.
+        which must run from a static, known-good egress that SET accepts. Read the README.
       </p>
     </main>
   );
