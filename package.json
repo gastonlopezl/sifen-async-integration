@@ -1,0 +1,38 @@
+{
+  "name": "sifen-async-integration",
+  "version": "1.0.0",
+  "private": false,
+  "description": "SIFEN electronic invoicing for Paraguay in Next.js. The async lote architecture (enqueue, sign, dispatch, poll, consultDE fallback) plus the IP adhesion gotcha that blocks every serverless integration.",
+  "license": "MIT",
+  "author": "Gaston Lopez",
+  "homepage": "https://thebrightidea.ai",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx tests/*.test.ts",
+    "db:migrate": "node --import tsx db/migrate.ts",
+    "worker": "node --import tsx src/workers/sifen-worker.ts",
+    "drain": "node --import tsx src/scripts/sifen-drain.ts"
+  },
+  "dependencies": {
+    "fast-xml-parser": "4.5.0",
+    "jszip": "3.10.1",
+    "next": "16.2.0",
+    "pg": "8.13.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "zod": "4.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.0.0",
+    "@types/pg": "8.11.10",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "tsx": "4.19.2",
+    "typescript": "5.7.2"
+  }
+}

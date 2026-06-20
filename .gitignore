@@ -1,0 +1,16 @@
+node_modules
+.next
+out
+.env
+.env.local
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+coverage
+
+# Certificates and key material never get committed. Not the .p12, not the PEMs.
+*.p12
+*.pem
+*.key
+certs/
