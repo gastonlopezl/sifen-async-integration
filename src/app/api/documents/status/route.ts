@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { findByCdc } from "@/lib/db/documents";
+import { findStatusByCdc } from "@/lib/db/documents";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -22,7 +22,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "cdc must be 44 digits" }, { status: 400 });
   }
 
-  const doc = await findByCdc(parsed.data.cdc);
+  const doc = await findStatusByCdc(parsed.data.cdc);
   if (!doc) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

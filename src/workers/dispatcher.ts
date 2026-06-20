@@ -236,6 +236,10 @@ export class SifenDispatcher {
   // to the queue for the next tick.
   private async handleTransient(ids: string[], err: unknown): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
+    // poll_attempts doubles as the dispatch retry counter here. A document is
+    // either pre-send (dispatch retries) or post-send (poll retries), never both
+    // at once, so the two lifecycles do not overlap on the column. The cap below
+    // and the poller's own cap each read the value in their own phase.
     const { rows } = await import("@/lib/db/pool").then((m) =>
       m.pool.query<{ poll_attempts: number }>(
         `SELECT poll_attempts FROM documents WHERE id = ANY($1::uuid[]) ORDER BY poll_attempts DESC LIMIT 1`,

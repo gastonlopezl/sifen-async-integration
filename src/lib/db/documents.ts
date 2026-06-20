@@ -231,12 +231,24 @@ export async function applyCdcResult(
   );
 }
 
-export async function findByCdc(cdc: string): Promise<DocumentRow | null> {
-  const { rows } = await pool.query<DocumentRow>(
-    `SELECT id, document_number, cdc, customer_ruc, customer_name, total_pyg,
-            xml_signed, sifen_status, protocol_number, dispatch_key, submitted_at,
-            next_poll_at, poll_attempts, response_code, response_message, last_error,
-            created_at, approved_at
+export type DocumentStatusView = Pick<
+  DocumentRow,
+  | "cdc"
+  | "document_number"
+  | "sifen_status"
+  | "protocol_number"
+  | "response_code"
+  | "response_message"
+  | "approved_at"
+>;
+
+// Status lookup for the public route. Selects only the DTO columns, never the
+// signed XML or the dispatch/poll bookkeeping: the status endpoint is a hot path
+// (clients poll it) and has no business reading the document body.
+export async function findStatusByCdc(cdc: string): Promise<DocumentStatusView | null> {
+  const { rows } = await pool.query<DocumentStatusView>(
+    `SELECT cdc, document_number, sifen_status, protocol_number,
+            response_code, response_message, approved_at
        FROM documents WHERE cdc = $1`,
     [cdc],
   );
